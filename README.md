@@ -1,10 +1,8 @@
-## Live Demo
-
+API Endpoint:
 https://sqlmind-lupf.onrender.com
 
-API Docs:
+Interactive API Documentation:
 https://sqlmind-lupf.onrender.com/docs
-
 # SQLMind
 
 > Describe the data you need in plain English. Get back an optimized SQL query, execute it, and see the results.
