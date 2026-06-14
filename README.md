@@ -1,38 +1,18 @@
-# 🧠 SQLMind
+# SQLMind
 
-> Type what you want. Get SQL. See the data.
+> Describe the data you need in plain English. Get back an optimized SQL query, execute it, and see the results.
 
 [![Python](https://img.shields.io/badge/Python-3.11-blue?style=flat-square&logo=python)]()
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-green?style=flat-square&logo=fastapi)]()
-[![LangChain](https://img.shields.io/badge/LangChain-0.2-orange?style=flat-square)]()
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
+[![CI](https://github.com/theprashantdev/sqlmind/actions/workflows/ci.yml/badge.svg)](https://github.com/theprashantdev/sqlmind/actions/workflows/ci.yml)
 
 ## What It Does
 
-SQLMind lets any user — technical or not — query any database by describing what they want in plain English.
-
-**Input:** `"Show me the top 10 customers by total order value this year, with their email"`
-
-**Output:**
-```sql
-SELECT c.name, c.email, SUM(o.total) AS total_value
-FROM customers c
-JOIN orders o ON c.id = o.customer_id
-WHERE EXTRACT(YEAR FROM o.created_at) = 2026
-GROUP BY c.id, c.name, c.email
-ORDER BY total_value DESC
-LIMIT 10;
-```
-
-Plus: the actual query results, in table form.
-
-## How It Works
-
-1. **Schema Introspection** — SQLMind reads your database schema automatically (table names, columns, types, relationships)
-2. **Prompt Engineering** — schema + user question are structured into a precise LLM prompt
-3. **SQL Generation** — LLM generates syntactically correct, optimized SQL for your specific DB dialect
-4. **Safety Check** — only SELECT statements are allowed; all writes blocked
-5. **Execution** — query runs against your DB, results returned as JSON
+1. Connect SQLMind to any PostgreSQL, MySQL, or SQLite database
+2. Ask a question in plain English: `"Show me the top 10 customers by total order value"`
+3. SQLMind reads your schema, generates a correct SQL query, validates it is read-only, executes it, and returns the results
+4. Every generated query is validated before execution — write operations (`DELETE`, `DROP`, `INSERT`, `UPDATE`, etc.) are blocked at the safety layer
 
 ## Quick Start
 
@@ -40,72 +20,117 @@ Plus: the actual query results, in table form.
 git clone https://github.com/theprashantdev/sqlmind
 cd sqlmind
 pip install -r requirements.txt
-cp .env.example .env  # fill in DB URL + OpenRouter key
-uvicorn app.main:app --reload
+cp .env.example .env
+# Edit .env — set OPENROUTER_API_KEY
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-## API
+Open **http://localhost:8000/docs** for interactive API docs.
 
-### `POST /api/query`
+## Environment Variables
+
+```env
+OPENROUTER_API_KEY=your_openrouter_api_key_here
+OPENROUTER_MODEL=openai/gpt-4o-mini
+DEFAULT_DATABASE_URL=postgresql://user:password@localhost:5432/mydb
+MAX_ROWS=1000
+QUERY_TIMEOUT=10
+```
+
+`DEFAULT_DATABASE_URL` is optional. If not set, callers must provide `database_url` in each request.
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/query` | Ask a question, get SQL + results |
+| `POST` | `/api/schema` | Inspect the schema of a connected database |
+| `GET` | `/health` | Health check |
+
+## Example Request
+
+```bash
+curl -X POST http://localhost:8000/api/query \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "question": "Top 5 customers by total order value",
+    "database_url": "postgresql://user:pass@localhost/mydb"
+  }'
+```
 
 ```json
 {
-  "question": "Which products have not been ordered in the last 30 days?",
-  "database_url": "postgresql://user:pass@host:5432/mydb"
+  "question": "Top 5 customers by total order value",
+  "sql": "SELECT c.name, SUM(o.total) AS total_value FROM customers c JOIN orders o ON c.id = o.customer_id GROUP BY c.id ORDER BY total_value DESC LIMIT 5",
+  "columns": ["name", "total_value"],
+  "rows": [{"name": "Acme Corp", "total_value": 142000}],
+  "row_count": 5,
+  "execution_ms": 12
 }
 ```
 
-**Response:**
-```json
-{
-  "question": "Which products have not been ordered in the last 30 days?",
-  "sql": "SELECT p.id, p.name FROM products p WHERE p.id NOT IN (SELECT DISTINCT product_id FROM orders WHERE created_at > NOW() - INTERVAL '30 days');",
-  "results": [...],
-  "row_count": 14,
-  "execution_ms": 23
-}
+## Safety
+
+Every generated query is validated before execution. Only `SELECT` is permitted. Any query containing `INSERT`, `UPDATE`, `DELETE`, `DROP`, `TRUNCATE`, `ALTER`, `CREATE`, or `EXEC` is rejected with a `400` error before it reaches the database.
+
+## Running Tests
+
+Tests use mocked LLM and database calls — no API key or live database needed.
+
+```bash
+pytest --tb=short -v
 ```
 
-### `POST /api/schema`
-Introspect any database and return its schema.
+## Docker
 
-### `GET /api/history`
-Full query history with SQL and results.
+```bash
+docker build -t sqlmind .
+docker run -p 8000:8000 --env-file .env sqlmind
+```
 
-## Safety Model
+## Architecture
 
-- ✅ SELECT statements only
-- ❌ INSERT / UPDATE / DELETE / DROP / TRUNCATE — all blocked at parse level
-- ✅ Query timeout: 10 seconds max
-- ✅ Result limit: 1000 rows max
-- ✅ SQL injection prevention via parameterized execution
-
-## Supported Databases
-
-- PostgreSQL
-- MySQL
-- SQLite
-- (Extensible — any SQLAlchemy-compatible DB)
+```
+POST /api/query
+       │
+       ▼
+  Schema Introspection
+  (read table/column structure from DB)
+       │
+       ▼
+  SQL Generation
+  (OpenRouter LLM — SELECT only)
+       │
+       ▼
+  Safety Validation
+  (block any non-SELECT keywords)
+       │
+       ▼
+  Query Execution
+  (return columns + rows + timing)
+```
 
 ## Project Structure
 
 ```
 sqlmind/
 ├── app/
-│   ├── main.py
-│   ├── routes/
-│   │   ├── query.py       # NL query endpoint
-│   │   └── schema.py      # Schema introspection
+│   ├── core/config.py        # Pydantic settings
 │   ├── engine/
-│   │   ├── introspector.py  # DB schema reader
-│   │   ├── generator.py     # NL → SQL via LLM
-│   │   ├── executor.py      # Safe query execution
-│   │   └── safety.py        # SQL safety validator
-│   └── core/config.py
+│   │   ├── generator.py      # OpenRouter SQL generation
+│   │   ├── executor.py       # Query execution
+│   │   ├── introspector.py   # Schema reading
+│   │   └── safety.py         # SQL validation
+│   ├── routes/query.py       # API routes
+│   └── main.py
 ├── tests/
+│   ├── test_safety.py
+│   └── test_api.py
+├── conftest.py
+├── pytest.ini
 ├── requirements.txt
-├── .env.example
-└── README.md
+├── Dockerfile
+└── .env.example
 ```
 
 ## License
